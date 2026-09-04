@@ -1600,8 +1600,7 @@ impl ObscuraJsRuntime {
                     format!("globalThis.__obscura_objects['{}']", oid),
                 )
                 .map_err(|e| format!("JS error: {}", e))?;
-            let json_val = self.v8_to_json(read)?;
-            return Ok(Self::info_from_json(&json_val));
+            return self.v8_to_remote_object_info(read);
         }
 
         Ok(Self::info_from_meta(&meta_json, Some(oid)))
@@ -1716,8 +1715,7 @@ impl ObscuraJsRuntime {
                         format!("globalThis.__obscura_objects['{}']", oid),
                     )
                     .map_err(|e| format!("JS error: {}", e))?;
-                let json_val = self.v8_to_json(read)?;
-                return Ok(Self::info_from_json(&json_val));
+                return self.v8_to_remote_object_info(read);
             }
 
             let meta_result = self
@@ -3007,6 +3005,86 @@ impl ObscuraJsRuntime {
 
         let s = local.to_rust_string_lossy(scope);
         Ok(serde_json::Value::String(s))
+    }
+
+
+    fn v8_to_remote_object_info(
+        &mut self,
+        result: deno_core::v8::Global<deno_core::v8::Value>,
+    ) -> Result<RemoteObjectInfo, String> {
+        let primitive_info = {
+            let scope = &mut self.runtime.handle_scope();
+            let local = deno_core::v8::Local::new(scope, result.clone());
+
+            if local.is_undefined() {
+                Some(Ok(RemoteObjectInfo {
+                    js_type: "undefined".into(),
+                    subtype: None,
+                    class_name: String::new(),
+                    description: String::new(),
+                    object_id: None,
+                    value: None,
+                }))
+            } else if local.is_null() {
+                Some(Ok(RemoteObjectInfo {
+                    js_type: "object".into(),
+                    subtype: Some("null".into()),
+                    class_name: String::new(),
+                    description: "null".into(),
+                    object_id: None,
+                    value: Some(serde_json::Value::Null),
+                }))
+            } else if local.is_boolean() {
+                let b = local.boolean_value(scope);
+                Some(Ok(RemoteObjectInfo {
+                    js_type: "boolean".into(),
+                    subtype: None,
+                    class_name: String::new(),
+                    description: b.to_string(),
+                    object_id: None,
+                    value: Some(serde_json::json!(b)),
+                }))
+            } else if local.is_number() {
+                if let Some(n) = local.number_value(scope) {
+                    // Pre-existing gap: unserializableValue for non-finite numbers (NaN, Infinity, -Infinity)
+                    // is not natively representable in serde_json::Number without a broad schema change.
+                    // We fall back to the existing behavior (mapping to Null/string) for non-finite numbers.
+                    if n.is_finite() {
+                        Some(Ok(RemoteObjectInfo {
+                            js_type: "number".into(),
+                            subtype: None,
+                            class_name: String::new(),
+                            description: n.to_string(),
+                            object_id: None,
+                            value: Some(serde_json::json!(n)),
+                        }))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else if local.is_string() {
+                let s = local.to_rust_string_lossy(scope);
+                Some(Ok(RemoteObjectInfo {
+                    js_type: "string".into(),
+                    subtype: None,
+                    class_name: String::new(),
+                    description: s.clone(),
+                    object_id: None,
+                    value: Some(serde_json::Value::String(s)),
+                }))
+            } else {
+                None
+            }
+        };
+
+        if let Some(info) = primitive_info {
+            return info;
+        }
+
+        let val = self.v8_to_json(result).unwrap_or(serde_json::Value::Null);
+        Ok(Self::info_from_json(&val))
     }
 
     fn info_from_json(value: &serde_json::Value) -> RemoteObjectInfo {
