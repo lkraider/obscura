@@ -20,6 +20,11 @@ fn insert_text_js(text: &str) -> String {
             var t = document.activeElement;\
             if (!t || (t.localName !== 'input' && t.localName !== 'textarea')) return;\
             var ins = {text};\
+            var disabled = Boolean(t.disabled || (t.hasAttribute && t.hasAttribute('disabled')));\
+            var readOnly = Boolean(t.readOnly || (t.hasAttribute && (t.hasAttribute('readonly') || t.hasAttribute('readOnly'))));\
+            if (ins.length === 0 || disabled || readOnly) return;\
+            var before = globalThis.__obscura_markTrusted(new InputEvent('beforeinput', {{bubbles:true,cancelable:true,composed:true,data:ins,inputType:'insertText'}}));\
+            if (!t.dispatchEvent(before)) return;\
             var v = t.value || '';\
             var s = t.selectionStart, e = t.selectionEnd;\
             if (s == null) {{\
@@ -32,7 +37,7 @@ fn insert_text_js(text: &str) -> String {
                 var caret = lo + ins.length;\
                 t.setSelectionRange(caret, caret);\
             }}\
-            t.dispatchEvent(globalThis.__obscura_markTrusted(new Event('input', {{bubbles:true}})));\
+            t.dispatchEvent(globalThis.__obscura_markTrusted(new InputEvent('input', {{bubbles:true,composed:true,data:ins,inputType:'insertText'}})));\
         }})()",
         text = literal,
     )
@@ -102,18 +107,40 @@ pub async fn handle(
     session_id: &Option<String>,
 ) -> Result<Value, String> {
     match method {
+        "insertText" => {
+            let text = match params.get("text") {
+                Some(v) if v.is_string() => v.as_str().unwrap(),
+                _ => return Err("Invalid or missing 'text' parameter".to_string()),
+            };
+            if !text.is_empty() {
+                if let Some(page) = ctx.get_session_page_mut(session_id) {
+                    page.evaluate(&insert_text_js(text));
+                    page.settle(50).await;
+                }
+            }
+            Ok(json!({}))
+        }
         "dispatchMouseEvent" => {
             let event_type = params.get("type").and_then(|v| v.as_str()).unwrap_or("");
             let x = params.get("x").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let y = params.get("y").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let button = params.get("button").and_then(|v| v.as_str()).unwrap_or("left");
+            let button = params
+                .get("button")
+                .and_then(|v| v.as_str())
+                .unwrap_or("left");
             let button_code = mouse_button_code(button);
             let buttons = params
                 .get("buttons")
                 .and_then(|v| v.as_u64())
                 .unwrap_or_else(|| mouse_button_mask(button));
-            let click_count = params.get("clickCount").and_then(|v| v.as_u64()).unwrap_or(1);
-            let modifiers = params.get("modifiers").and_then(|v| v.as_u64()).unwrap_or(0);
+            let click_count = params
+                .get("clickCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(1);
+            let modifiers = params
+                .get("modifiers")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let (alt_key, ctrl_key, meta_key, shift_key) = modifier_flags(modifiers);
 
             if event_type == "mousePressed" {
