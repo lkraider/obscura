@@ -239,10 +239,10 @@ pub async fn handle(
                 let page = ctx
                     .get_session_page_mut(session_id)
                     .ok_or("No page")?;
-                let escaped_oid = oid.replace('\\', "\\\\").replace('\'', "\\'");
+                let safe_oid = serde_json::to_string(oid).unwrap_or_else(|_| "\"\"".to_string());
                 let code = format!(
                     "(function() {{\
-                        var obj = globalThis.__obscura_objects['{oid}'];\
+                        var obj = globalThis.__obscura_objects[{safe_oid}];\
                         if (!obj || typeof obj !== 'object') return [];\
                         var keys = Object.keys(obj);\
                         return keys.map(function(k) {{\
@@ -251,7 +251,7 @@ pub async fn handle(
                             var item = {{ name: k, type: t }};\
                             if (v === null) {{ item.value = null; return item; }}\
                             if (t !== 'object' && t !== 'function') {{ item.value = v; return item; }}\
-                            var childOid = '{oid}::' + k;\
+                            var childOid = {safe_oid} + '::' + k;\
                             globalThis.__obscura_objects[childOid] = v;\
                             item.childOid = childOid;\
                             if (typeof v.nodeType === 'number') {{\
@@ -269,7 +269,6 @@ pub async fn handle(
                             return item;\
                         }});\
                     }})()",
-                    oid = escaped_oid,
                 );
                 let result = page.evaluate(&code);
                 if let serde_json::Value::Array(props) = result {
@@ -281,6 +280,9 @@ pub async fn handle(
                                 p.get("type").and_then(|v| v.as_str()).unwrap_or("undefined");
                             let mut remote = json!({ "type": prop_type });
                             if let Some(child_oid) = p.get("childOid").and_then(|v| v.as_str()) {
+                                if let Some(js) = &mut page.js {
+                                    js.register_object_id(child_oid.to_string());
+                                }
                                 remote["type"] = json!("object");
                                 if let Some(sub) = p.get("subtype").and_then(|v| v.as_str()) {
                                     remote["subtype"] = json!(sub);

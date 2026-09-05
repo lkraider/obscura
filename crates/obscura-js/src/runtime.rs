@@ -1634,9 +1634,9 @@ impl ObscuraJsRuntime {
         await_promise: bool,
         await_timeout_ms: u64,
     ) -> Result<RemoteObjectInfo, String> {
+        let this_expr = self.resolve_this(object_id)?;
+        let (setup, args_list) = self.build_args(arguments)?;
         self.begin_javascript_task();
-        let this_expr = self.resolve_this(object_id);
-        let (setup, args_list) = self.build_args(arguments);
 
         self.object_counter += 1;
         let oid = self.make_oid(self.object_counter);
@@ -1858,6 +1858,14 @@ impl ObscuraJsRuntime {
         }
     }
 
+
+    pub fn register_object_id(&mut self, object_id: String) {
+        let safe_oid = serde_json::to_string(&object_id).unwrap_or_else(|_| "\"\"".to_string());
+        self.object_store.insert(
+            object_id,
+            format!("globalThis.__obscura_objects[{}]", safe_oid),
+        );
+    }
     pub fn release_object_group(&mut self) {
         let _ = self.execute_runtime_script(
             "<releaseGroup>",
@@ -2909,31 +2917,20 @@ impl ObscuraJsRuntime {
         )
     }
 
-    fn resolve_this(&self, object_id: Option<&str>) -> String {
+    fn resolve_this(&self, object_id: Option<&str>) -> Result<String, String> {
         match object_id {
             Some(oid) => {
                 if let Some(retrieval) = self.object_store.get(oid) {
-                    retrieval.clone()
-                } else if oid.starts_with("node-") {
-                    let nid = oid.strip_prefix("node-").unwrap_or("0");
-                    format!(
-                        "(function() {{ \
-                            var nid = {}; \
-                            var cache = globalThis._cache || new Map(); \
-                            if (cache.has(nid)) return cache.get(nid); \
-                            return null; \
-                        }})()",
-                        nid
-                    )
+                    Ok(retrieval.clone())
                 } else {
-                    "globalThis".to_string()
+                    Err("Could not find object with given id".to_string())
                 }
             }
-            None => "globalThis".to_string(),
+            None => Ok("globalThis".to_string()),
         }
     }
 
-    fn build_args(&self, arguments: &[serde_json::Value]) -> (String, String) {
+    fn build_args(&self, arguments: &[serde_json::Value]) -> Result<(String, String), String> {
         let mut setup_lines = Vec::new();
         let mut arg_names = Vec::new();
 
@@ -2947,7 +2944,7 @@ impl ObscuraJsRuntime {
                 if let Some(retrieval) = self.object_store.get(oid) {
                     setup_lines.push(format!("var {} = {};", arg_name, retrieval));
                 } else {
-                    setup_lines.push(format!("var {} = undefined;", arg_name));
+                    return Err("Could not find object with given id".to_string());
                 }
             } else if let Some(unser) = arg.get("unserializableValue").and_then(|v| v.as_str()) {
                 setup_lines.push(format!("var {} = {};", arg_name, unser));
@@ -2957,7 +2954,7 @@ impl ObscuraJsRuntime {
             arg_names.push(arg_name);
         }
 
-        (setup_lines.join("\n"), arg_names.join(", "))
+        Ok((setup_lines.join("\n"), arg_names.join(", ")))
     }
 
     fn v8_to_json(
