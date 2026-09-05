@@ -59,7 +59,7 @@ jobs:
           cat obscura.sha256
 
       - name: Upload patched render-stealth artifact
-        uses: actions/upload-artifact@043fb46c729d4c45ff4d23a747c4c533fb31884a # v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: obscura-cli-macos-arm64-4aea848-stealth
           path: |
