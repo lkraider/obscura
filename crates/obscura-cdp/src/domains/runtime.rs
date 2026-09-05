@@ -22,7 +22,7 @@ fn is_valid_binding_name(name: &str) -> bool {
 /// Puppeteer's waitForNavigation / Playwright's wait_for_url resolves.
 /// Without this, in-page navigations look like Runtime.evaluate finishing
 /// to clients and they hang waiting for a frameNavigated that never fires.
-async fn emit_post_eval_nav(
+pub(crate) async fn emit_post_eval_nav(
     ctx: &mut CdpContext,
     session_id: &Option<String>,
 ) -> Result<(), String> {
