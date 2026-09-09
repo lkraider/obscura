@@ -47,10 +47,19 @@ jobs:
           echo "SDKROOT=$SDK_PATH" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-isystem $SDK_PATH/usr/include/c++/v1" >> "$GITHUB_ENV"
           echo "LIBCLANG_PATH=$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib" >> "$GITHUB_ENV"
-      - name: Focused transport tests
+      - name: Baseline transport suite
+        continue-on-error: true
         run: |
           mkdir -p evidence
-          OBSCURA_NET_DIAGNOSTICS=1 cargo nextest run --locked --release -p obscura-net --features stealth --no-fail-fast 2>&1 | tee evidence/net.log
+          git fetch --depth=1 origin 88de58c9c783a40f493c5211524ffdc9adb7ebe6
+          git checkout 88de58c9c783a40f493c5211524ffdc9adb7ebe6 -- crates/obscura-net/src/wreq_client.rs
+          trap 'git checkout "$GITHUB_SHA" -- crates/obscura-net/src/wreq_client.rs' EXIT
+          cargo nextest run --locked --release -p obscura-net --features stealth --no-fail-fast 2>&1 | tee evidence/baseline-net.log
+      - name: Focused diagnostic tests
+        run: OBSCURA_NET_DIAGNOSTICS=1 cargo nextest run --locked --release -p obscura-net --features stealth -E 'test(diagnostics)' --no-fail-fast 2>&1 | tee evidence/diagnostics.log
+      - name: Candidate transport suite
+        continue-on-error: true
+        run: OBSCURA_NET_DIAGNOSTICS=1 cargo nextest run --locked --release -p obscura-net --features stealth --no-fail-fast 2>&1 | tee evidence/net.log
       - name: Build render and stealth CLI
         run: cargo build --locked --release -p obscura-cli --bins --features render,stealth
       - name: Stage binary
