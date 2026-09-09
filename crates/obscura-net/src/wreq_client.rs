@@ -1,4 +1,7 @@
 #[cfg(feature = "stealth")]
+mod diagnostics;
+
+#[cfg(feature = "stealth")]
 use std::collections::HashMap;
 #[cfg(feature = "stealth")]
 use std::error::Error;
@@ -482,6 +485,17 @@ impl StealthHttpClient {
 
         let in_flight = InFlightGuard::new(&self.in_flight);
         let resp = req.send().await.map_err(|e| {
+            if std::env::var("OBSCURA_NET_DIAGNOSTICS").as_deref() == Ok("1") {
+                tracing::warn!(
+                    causes = %diagnostics::source_summary(&e),
+                    timeout = e.is_timeout(),
+                    connect = e.is_connect(),
+                    connection_reset = e.is_connection_reset(),
+                    builder = e.is_builder(),
+                    tls = e.is_tls(),
+                    "stealth send_single failed"
+                );
+            }
             ObscuraNetError::Network(format!("{}: {}", url, e))
         })?;
 
@@ -623,6 +637,22 @@ mod tests {
         assert_eq!(response.status(), wreq::StatusCode::OK);
         assert_eq!(response.text().await.unwrap(), "ok");
         assert_eq!(server.join().unwrap(), 2);
+    }
+
+    #[tokio::test]
+    async fn stealth_diagnostics_classify_real_reset_without_uri_or_headers() {
+        let (port, server) = reset_fixture(false);
+        let client = wreq::Client::builder().no_proxy()
+            .timeout(Duration::from_secs(5)).build().unwrap();
+        let error = client.post(format!("http://127.0.0.1:{port}/?token=private"))
+            .header("authorization", "Bearer private")
+            .send().await.expect_err("fixture resets the connection");
+        assert!(error.is_connection_reset());
+        let summary = super::diagnostics::source_summary(&error);
+        assert!(summary.contains("io(kind=ConnectionReset,"), "{summary}");
+        assert!(!summary.contains("private"));
+        assert!(!summary.contains("127.0.0.1"));
+        assert_eq!(server.join().unwrap(), 1);
     }
 
     #[tokio::test]
